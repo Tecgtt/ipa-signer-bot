@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ipa-signer-bot
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: BOT_TOKEN
+        value: 8682648198:AAEdBKAgP0779Pv5EgyM5MpkGAyMIWrxA1Q
+      - key: ADMIN_USERNAMES
+        value: yqios
+      - key: SERVER_PORT
+        value: 8080
