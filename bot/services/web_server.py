@@ -38,6 +38,14 @@ async def get_public_or_local_ip() -> str:
         return _public_ip_cache
 
 
+async def handle_root(request: web.Request):
+    return web.Response(text="iOS IPA Signer Telegram Bot is active & running 24/7!", content_type="text/plain")
+
+
+async def handle_health(request: web.Request):
+    return web.json_response({"status": "healthy", "service": "ipa-signer-bot"})
+
+
 async def handle_download(request: web.Request):
     filename = request.match_info.get("filename", "")
     # Prevent directory traversal
@@ -55,6 +63,8 @@ async def handle_download(request: web.Request):
 
 def create_web_app() -> web.Application:
     app = web.Application()
+    app.router.add_get("/", handle_root)
+    app.router.add_get("/healthz", handle_health)
     app.router.add_get("/download/{filename}", handle_download)
     return app
 

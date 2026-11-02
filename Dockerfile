@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone and compile zsign
-RUN git clone https://github.com/zhlynn/zsign.git /tmp/zsign \
+# Clone and compile zsign with fast shallow clone
+RUN git clone --depth 1 https://github.com/zhlynn/zsign.git /tmp/zsign \
     && cd /tmp/zsign \
     && g++ *.cpp common/*.cpp -lcrypto -lz -O3 -o /usr/local/bin/zsign \
     && rm -rf /tmp/zsign
@@ -32,6 +32,9 @@ COPY . /app/
 
 # Create persistent storage directories
 RUN mkdir -p /app/data /app/temp
+
+# Expose Render standard ports
+EXPOSE 8080 10000
 
 # Run bot
 CMD ["python", "main.py"]

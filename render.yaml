@@ -4,10 +4,9 @@ services:
     runtime: docker
     plan: free
     region: oregon
+    healthCheckPath: /healthz
     envVars:
       - key: BOT_TOKEN
         value: 8682648198:AAEdBKAgP0779Pv5EgyM5MpkGAyMIWrxA1Q
       - key: ADMIN_USERNAMES
         value: yqios
-      - key: SERVER_PORT
-        value: 8080

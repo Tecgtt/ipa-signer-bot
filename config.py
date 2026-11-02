@@ -52,5 +52,5 @@ MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 
 # Built-in Web Server for Unlimited Size Downloads (> 2GB files)
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8080"))
+SERVER_PORT = int(os.getenv("PORT", os.getenv("SERVER_PORT", "8080")))
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")  # If set, e.g. http://your-ip:8080 or domain
