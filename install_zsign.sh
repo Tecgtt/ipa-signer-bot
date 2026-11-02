@@ -9,29 +9,23 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "[*] Detected macOS."
     if command -v brew &>/dev/null; then
         echo "[*] Installing dependencies with Homebrew..."
-        brew install openssl zlib
-        echo "[*] Cloning and building zsign..."
-        git clone https://github.com/zhlynn/zsign.git /tmp/zsign_build || true
-        cd /tmp/zsign_build
-        OPENSSL_PREFIX=$(brew --prefix openssl)
-        g++ *.cpp common/*.cpp -lcrypto -lz -I"$OPENSSL_PREFIX/include" -L"$OPENSSL_PREFIX/lib" -O3 -o /usr/local/bin/zsign || \
-        sudo g++ *.cpp common/*.cpp -lcrypto -lz -I"$OPENSSL_PREFIX/include" -L"$OPENSSL_PREFIX/lib" -O3 -o /usr/local/bin/zsign
+        brew install openssl zlib minizip pkg-config
+        rm -rf /tmp/zsign
+        git clone --depth 1 https://github.com/zhlynn/zsign.git /tmp/zsign
+        cd /tmp/zsign/build/macos
+        make
+        sudo cp /tmp/zsign/bin/zsign /usr/local/bin/zsign || cp /tmp/zsign/bin/zsign /usr/local/bin/zsign
         echo "[✅] zsign successfully installed to /usr/local/bin/zsign!"
-    else
-        echo "[!] Homebrew not found. Please install Homebrew or compile zsign manually."
     fi
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     echo "[*] Detected Linux."
-    echo "[*] Installing dependencies (g++, make, libssl-dev, zlib1g-dev)..."
     sudo apt-get update
-    sudo apt-get install -y git g++ make libssl-dev zlib1g-dev
-
-    echo "[*] Cloning and building zsign..."
-    rm -rf /tmp/zsign_build
-    git clone https://github.com/zhlynn/zsign.git /tmp/zsign_build
-    cd /tmp/zsign_build
-    g++ *.cpp common/*.cpp -lcrypto -lz -O3 -o /usr/local/bin/zsign || \
-    sudo g++ *.cpp common/*.cpp -lcrypto -lz -O3 -o /usr/local/bin/zsign
+    sudo apt-get install -y build-essential git libssl-dev libminizip-dev pkg-config zlib1g-dev
+    rm -rf /tmp/zsign
+    git clone --depth 1 https://github.com/zhlynn/zsign.git /tmp/zsign
+    cd /tmp/zsign/build/linux
+    make
+    sudo cp /tmp/zsign/bin/zsign /usr/local/bin/zsign || cp /tmp/zsign/bin/zsign /usr/local/bin/zsign
     echo "[✅] zsign successfully installed to /usr/local/bin/zsign!"
 fi
 
