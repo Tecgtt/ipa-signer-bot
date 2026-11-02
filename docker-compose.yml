@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  ipa-signer-bot:
+    build: .
+    container_name: ipa_signer_telegram_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
