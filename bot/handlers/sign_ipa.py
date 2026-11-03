@@ -21,18 +21,14 @@ async def sign_ipa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     user_data = db.get_user(user_id) or {}
 
-    p12_path = user_data.get("p12_path")
-    prov_path = user_data.get("mobileprovision_path")
+    # Check certificate readiness using permanent storage check
+    cert_info = db.get_user_cert_info(user_id)
 
-    # Check certificate readiness
-    has_p12 = p12_path and os.path.exists(p12_path)
-    has_prov = prov_path and os.path.exists(prov_path)
-
-    if not has_p12 or not has_prov:
+    if not cert_info["is_ready"]:
         missing = []
-        if not has_p12:
+        if not cert_info["has_p12"]:
             missing.append("`.p12` Certificate")
-        if not has_prov:
+        if not cert_info["has_prov"]:
             missing.append("`.mobileprovision` Profile")
 
         await update.message.reply_text(
@@ -40,7 +36,7 @@ async def sign_ipa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"You need to provide your certificate before signing IPAs.\n"
             f"Missing items: {', '.join(missing)}\n\n"
             "👉 *Please tap `📦 My Certificate` to upload them now.*",
-            reply_markup=get_cert_menu_keyboard(has_cert=(has_p12 or has_prov)),
+            reply_markup=get_cert_menu_keyboard(has_cert=(cert_info["has_p12"] or cert_info["has_prov"])),
             parse_mode="Markdown"
         )
         return
@@ -49,12 +45,15 @@ async def sign_ipa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     base_url = await get_public_or_local_ip()
     upload_portal_url = f"{base_url}/upload?user_id={user_id}"
+    cert_display = cert_info.get("cert_name") or "Saved Certificate"
 
     msg = (
         "📲 **Ready to Sign IPA!**\n\n"
-        "You can send your IPA in any of the following ways:\n\n"
+        f"🔑 **Active Certificate:** `{cert_display}` (🟢 Permanently Saved)\n"
+        "*(Note: You do NOT need to upload your certificate again!)*\n\n"
+        "Send your IPA file in any of the following ways:\n\n"
         "1. 📎 **Direct in Chat (Up to 2 GB):**\n"
-        "   Simply send the `.ipa` file directly here in Telegram chat.\n\n"
+        "   Simply send the `.ipa` file directly here in Telegram chat (High-speed MTProto 🚀).\n\n"
         "2. 🔗 **Direct Download Link:**\n"
         "   Send any direct link, Google Drive, Dropbox, or MediaFire link.\n\n"
         "3. 🌐 **Web Upload Portal (For massive files up to 10 GB):**\n"
@@ -106,7 +105,7 @@ async def download_file_from_url(url: str, dest_path: str, status_msg=None) -> b
 
                 with open(dest_path, "wb") as f:
                     while True:
-                        chunk = await response.content.read(2 * 1024 * 1024)  # 2MB chunks
+                        chunk = await response.content.read(4 * 1024 * 1024)  # 4MB chunks for fast link stream
                         if not chunk:
                             break
                         f.write(chunk)
@@ -135,6 +134,7 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     user_data = db.get_user(user_id) or {}
+    cert_info = db.get_user_cert_info(user_id)
     context.user_data.pop("waiting_for", None)
 
     input_ipa_path = os.path.join(TEMP_DIR, f"input_{user_id}.ipa")
@@ -147,7 +147,7 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async def update_download_progress(current: int, total: int):
         now = time.time()
-        if total > 0 and (now - last_edit[0] >= 3.0 or current == total):
+        if total > 0 and (now - last_edit[0] >= 2.5 or current == total):
             last_edit[0] = now
             pct = int((current / total) * 100)
             mb_cur = current / (1024 * 1024)
@@ -156,7 +156,7 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bar = "█" * filled + "░" * (10 - filled)
             try:
                 await status_msg.edit_text(
-                    f"⏳ **Downloading IPA from Telegram ({pct}%)...**\n"
+                    f"⚡ **Downloading IPA at High Speed ({pct}%)...**\n"
                     f"`[{bar}]` {mb_cur:.1f} MB / {mb_tot:.1f} MB",
                     parse_mode="Markdown"
                 )
@@ -165,7 +165,7 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async def update_upload_progress(current: int, total: int):
         now = time.time()
-        if total > 0 and (now - last_edit[0] >= 3.0 or current == total):
+        if total > 0 and (now - last_edit[0] >= 2.5 or current == total):
             last_edit[0] = now
             pct = int((current / total) * 100)
             mb_cur = current / (1024 * 1024)
@@ -174,7 +174,7 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bar = "█" * filled + "░" * (10 - filled)
             try:
                 await status_msg.edit_text(
-                    f"📤 **Uploading Signed IPA to Telegram ({pct}%)...**\n"
+                    f"⚡ **Uploading Signed IPA at High Speed ({pct}%)...**\n"
                     f"`[{bar}]` {mb_cur:.1f} MB / {mb_tot:.1f} MB",
                     parse_mode="Markdown"
                 )
@@ -215,13 +215,13 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_size_mb = file_size_bytes / (1024 * 1024)
 
         status_msg = await update.message.reply_text(
-            f"⏳ **Downloading `{original_filename}` ({file_size_mb:.1f} MB)...**\n`Initializing high-speed transfer...`",
+            f"⚡ **Downloading `{original_filename}` ({file_size_mb:.1f} MB)...**\n`Connecting high-speed MTProto pipeline...`",
             parse_mode="Markdown"
         )
 
         download_success = False
 
-        # Attempt 1: Telethon MTProto (supports up to 2000 MB / 2 GB direct in chat)
+        # Attempt 1: High-Speed Telethon MTProto (supports up to 2000 MB / 2 GB direct in chat)
         try:
             download_success = await download_direct_media(
                 chat_id=update.effective_chat.id,
@@ -270,10 +270,10 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     output_filename = f"signed_{user_id}_{clean_basename}"
     output_ipa_path = os.path.join(SIGNED_DIR, output_filename)
 
-    # Load signing options
-    p12_path = user_data.get("p12_path", "")
-    p12_pass = user_data.get("p12_password", "")
-    prov_path = user_data.get("mobileprovision_path", "")
+    # Load signing options from permanently saved certificate
+    p12_path = cert_info.get("p12_path", "")
+    p12_pass = cert_info.get("p12_password", "")
+    prov_path = cert_info.get("mobileprovision_path", "")
     bundle_id = user_data.get("custom_bundle_id") or None
     app_name = user_data.get("custom_app_name") or None
     custom_icon = user_data.get("custom_icon_path") or None
@@ -326,19 +326,18 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 **Size:** `{size_display}`\n"
         f"🆔 **Bundle ID:** `{bundle_id or 'Original'}`\n"
         f"🏷️ **App Name:** `{app_name or 'Original'}`\n"
-        f"🔑 **Certificate:** `{user_data.get('cert_name') or 'Custom'}`\n\n"
+        f"🔑 **Certificate:** `{cert_info.get('cert_name') or 'Custom Saved'}` (Permanently Saved ✅)\n\n"
         f"🚀 **Direct Download Link:** [Click to Download]({download_link})\n\n"
         "📲 **How to Install:**\n"
         "• Send to **TrollStore** / **Scarlet** / **Esign**\n"
         "• Or sideload with **AltStore** / **Sideloadly**"
     )
 
-    # User requested: Both IPA direct in chat AND Link should be available!
-    # If file <= 2000 MB: try direct Telegram in-chat upload via MTProto
+    # If file <= 2000 MB: try direct Telegram in-chat upload via high-speed MTProto
     uploaded_in_chat = False
     if file_size_mb <= 2000:
         last_edit[0] = 0.0
-        await status_msg.edit_text(f"📤 **Uploading signed `{original_filename}` to Telegram chat...**", parse_mode="Markdown")
+        await status_msg.edit_text(f"⚡ **Uploading signed `{original_filename}` to Telegram chat at high speed...**", parse_mode="Markdown")
         try:
             uploaded_in_chat = await upload_direct_media(
                 chat_id=update.effective_chat.id,

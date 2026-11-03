@@ -32,7 +32,7 @@ WORKDIR /app
 
 # Copy dependencies list and install
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && (pip install --no-cache-dir cryptg || true)
 
 # Copy source code
 COPY . /app/

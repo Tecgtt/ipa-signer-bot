@@ -47,16 +47,7 @@ class Database:
             """)
             conn.commit()
 
-    def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
-
-    def create_or_update_user(self, user_id: int, username: str = "", first_name: str = ""):
+    def ensure_user(self, user_id: int, username: str = "", first_name: str = ""):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -68,9 +59,23 @@ class Database:
             """, (user_id, username, first_name))
             conn.commit()
 
+    def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
+        self.ensure_user(user_id)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+
+    def create_or_update_user(self, user_id: int, username: str = "", first_name: str = ""):
+        self.ensure_user(user_id, username, first_name)
+
     def update_user_fields(self, user_id: int, **kwargs):
         if not kwargs:
             return
+        self.ensure_user(user_id)
         keys = list(kwargs.keys())
         values = list(kwargs.values())
         set_clause = ", ".join([f"{k} = ?" for k in keys])
@@ -81,22 +86,71 @@ class Database:
             cursor.execute(f"UPDATE users SET {set_clause} WHERE user_id = ?", values)
             conn.commit()
 
+    def get_user_cert_info(self, user_id: int) -> dict:
+        """Returns verified certificate details with permanent storage check and auto-recovery."""
+        self.ensure_user(user_id)
+        user = self.get_user(user_id) or {}
+        p12_path = user.get("p12_path") or ""
+        prov_path = user.get("mobileprovision_path") or ""
+        p12_password = user.get("p12_password") or ""
+        cert_name = user.get("cert_name") or ""
+        cert_expiry = user.get("cert_expiry") or ""
+
+        # Auto-recover from persistent certs folder if DB field was reset
+        from config import CERTS_DIR
+        default_p12 = os.path.join(CERTS_DIR, f"{user_id}.p12")
+        default_prov = os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
+
+        if (not p12_path or not os.path.exists(p12_path)) and os.path.exists(default_p12):
+            p12_path = default_p12
+            self.update_user_fields(user_id, p12_path=p12_path)
+
+        if (not prov_path or not os.path.exists(prov_path)) and os.path.exists(default_prov):
+            prov_path = default_prov
+            self.update_user_fields(user_id, mobileprovision_path=prov_path)
+
+        has_p12 = bool(p12_path and os.path.exists(p12_path))
+        has_prov = bool(prov_path and os.path.exists(prov_path))
+
+        return {
+            "has_p12": has_p12,
+            "has_prov": has_prov,
+            "is_ready": has_p12 and has_prov,
+            "p12_path": p12_path if has_p12 else "",
+            "mobileprovision_path": prov_path if has_prov else "",
+            "p12_password": p12_password,
+            "cert_name": cert_name,
+            "cert_expiry": cert_expiry,
+        }
+
     def increment_sign_count(self, user_id: int):
+        self.ensure_user(user_id)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET sign_count = sign_count + 1 WHERE user_id = ?", (user_id,))
             conn.commit()
 
     def clear_certificate(self, user_id: int):
+        from config import CERTS_DIR
+        default_p12 = os.path.join(CERTS_DIR, f"{user_id}.p12")
+        default_prov = os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
+        for fpath in [default_p12, default_prov]:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+
         user = self.get_user(user_id)
         if user:
             for field in ['p12_path', 'mobileprovision_path']:
-                path = user.get(field)
-                if path and os.path.exists(path):
+                p = user.get(field)
+                if p and os.path.exists(p):
                     try:
-                        os.remove(path)
+                        os.remove(p)
                     except Exception:
                         pass
+
         self.update_user_fields(
             user_id,
             p12_path="",

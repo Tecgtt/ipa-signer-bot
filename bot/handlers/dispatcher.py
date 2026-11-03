@@ -109,7 +109,9 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"  - **Certificate Name:** `{info.get('common_name')}`\n"
                 f"  - **Expires On:** `{info.get('valid_to')}` ({days_str})\n"
                 f"{prov_details}\n\n"
-                "🟢 **Status:** 100% Ready to Sign IPAs! Tap `📲 Sign IPA` below."
+                "💾 **Storage:** 🟢 **Permanently Saved (हमेशा के लिए सेव है)**\n"
+                "*(जब तक आप खुद डिलीट नहीं करेंगे, यह हमेशा सेव रहेगा और आपको दोबारा अपलोड करने की ज़रूरत नहीं होगी।)*\n\n"
+                "🚀 **Status:** 100% Ready to Sign IPAs! Tap `📲 Sign IPA` below."
             )
 
             await update.message.reply_text(

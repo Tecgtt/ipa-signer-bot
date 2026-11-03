@@ -202,11 +202,11 @@ async def handle_api_upload_ipa(request: web.Request):
 
     target_path = os.path.join(TEMP_DIR, f"input_{user_id}.ipa")
 
-    # Stream file to disk in 1MB chunks (handles 2GB, 3GB, 5GB+ with minimal RAM)
+    # Stream file to disk in 4MB high-speed chunks
     try:
-        with open(target_path, "wb") as f:
+        with open(target_path, "wb", buffering=4 * 1024 * 1024) as f:
             while True:
-                chunk = await request.content.read(1024 * 1024)
+                chunk = await request.content.read(4 * 1024 * 1024)
                 if not chunk:
                     break
                 f.write(chunk)
@@ -221,9 +221,11 @@ async def handle_api_upload_ipa(request: web.Request):
 
 async def run_background_signing(user_id: int, input_ipa_path: str, original_filename: str):
     user_data = db.get_user(user_id) or {}
-    p12_path = user_data.get("p12_path", "")
-    p12_pass = user_data.get("p12_password", "")
-    prov_path = user_data.get("mobileprovision_path", "")
+    cert_info = db.get_user_cert_info(user_id)
+
+    p12_path = cert_info.get("p12_path", "")
+    p12_pass = cert_info.get("p12_password", "")
+    prov_path = cert_info.get("mobileprovision_path", "")
     bundle_id = user_data.get("custom_bundle_id") or None
     app_name = user_data.get("custom_app_name") or None
     custom_icon = user_data.get("custom_icon_path") or None
@@ -293,7 +295,7 @@ async def run_background_signing(user_id: int, input_ipa_path: str, original_fil
         f"📦 **Size:** `{size_display}`\n"
         f"🆔 **Bundle ID:** `{bundle_id or 'Original'}`\n"
         f"🏷️ **App Name:** `{app_name or 'Original'}`\n"
-        f"🔑 **Certificate:** `{user_data.get('cert_name') or 'Custom'}`\n\n"
+        f"🔑 **Certificate:** `{cert_info.get('cert_name') or 'Custom Saved'}` (Permanently Saved ✅)\n\n"
         f"🚀 **Direct High-Speed Download Link:**\n"
         f"🔗 [Click Here to Download Signed IPA]({download_link})\n\n"
         f"`{download_link}`\n\n"
@@ -303,14 +305,32 @@ async def run_background_signing(user_id: int, input_ipa_path: str, original_fil
     )
 
     try:
-        await _bot_instance.send_message(
-            chat_id=user_id,
-            text=msg,
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
+        if file_size_mb <= 2000:
+            from bot.services.telegram_mtproto import upload_direct_media
+            await upload_direct_media(
+                chat_id=user_id,
+                file_path=output_ipa_path,
+                file_name=original_filename,
+                caption=msg
+            )
+        else:
+            await _bot_instance.send_message(
+                chat_id=user_id,
+                text=msg,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
     except Exception as e:
         print(f"[run_background_signing] Notification error: {e}")
+        try:
+            await _bot_instance.send_message(
+                chat_id=user_id,
+                text=msg,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+        except Exception:
+            pass
 
 
 def create_web_app() -> web.Application:

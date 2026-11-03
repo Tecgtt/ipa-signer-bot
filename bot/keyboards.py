@@ -31,21 +31,38 @@ def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 # Certificate Management Inline Keyboard
 def get_cert_menu_keyboard(has_cert: bool = False):
-    keyboard = [
-        [
-            InlineKeyboardButton("📤 Upload Certificate (P12 ➔ Prov)", callback_data="cert_upload_p12"),
-        ],
-        [
-            InlineKeyboardButton("🔑 Set / Change Password", callback_data="cert_set_pass"),
-        ],
-    ]
+    keyboard = []
     if has_cert:
         keyboard.append([
-            InlineKeyboardButton("🗑️ Delete My Certificate", callback_data="cert_delete"),
+            InlineKeyboardButton("📲 Sign IPA Now", callback_data="cert_sign_now"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🔄 Replace Certificate", callback_data="cert_upload_p12"),
+            InlineKeyboardButton("🔑 Change Password", callback_data="cert_set_pass"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🗑️ Delete Certificate (डिलीट करें)", callback_data="cert_delete_ask"),
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton("📤 Upload Certificate (P12 ➔ Prov)", callback_data="cert_upload_p12"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🔑 Set Password", callback_data="cert_set_pass"),
         ])
     keyboard.append([
         InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_home"),
     ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_cert_delete_confirm_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("⚠️ Yes, Delete Permanently", callback_data="cert_delete_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cert_menu_home"),
+        ]
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 
