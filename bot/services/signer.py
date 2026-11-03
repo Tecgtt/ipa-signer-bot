@@ -4,7 +4,7 @@ import zipfile
 import subprocess
 import tempfile
 import plistlib
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 from bot.services.icon_replacer import IconReplacer
 
 
@@ -33,7 +33,7 @@ class IPASigner:
         dylib_path: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
-        Signs the IPA file using zsign.
+        Signs the IPA file instantly using zsign (fast compression -z 1 and C++ in-memory patching).
         """
         if not os.path.exists(ipa_path):
             return False, f"IPA file not found: {ipa_path}"
@@ -43,17 +43,14 @@ class IPASigner:
             return False, f"Mobileprovision profile not found: {mobileprovision_path}"
 
         if not self.check_zsign_available():
-            return False, (
-                "zsign binary not found on the server!\n"
-                "Please install zsign to enable signing. Run `./install_zsign.sh`."
-            )
+            return False, "zsign binary not found on the server!"
 
         work_dir = tempfile.mkdtemp(prefix="ipa_sign_")
         try:
             target_to_sign = ipa_path
 
-            # If we need to replace app icon or inspect app name/plist
-            if (custom_icon_path and os.path.exists(custom_icon_path)) or new_app_name:
+            # Only extract if custom icon replacement is explicitly requested
+            if custom_icon_path and os.path.exists(custom_icon_path):
                 extract_dir = os.path.join(work_dir, "extracted")
                 os.makedirs(extract_dir, exist_ok=True)
                 with zipfile.ZipFile(ipa_path, 'r') as zip_ref:
@@ -68,41 +65,24 @@ class IPASigner:
                     return False, "Invalid IPA structure: No .app bundle found inside Payload."
 
                 app_path = os.path.join(payload_dir, app_dirs[0])
-
-                # Replace icon if requested
-                if custom_icon_path and os.path.exists(custom_icon_path):
-                    IconReplacer.replace_app_icons(app_path, custom_icon_path)
-
-                # Replace app display name in Info.plist if requested
-                if new_app_name:
-                    info_plist_path = os.path.join(app_path, "Info.plist")
-                    if os.path.exists(info_plist_path):
-                        try:
-                            with open(info_plist_path, "rb") as fp:
-                                plist_data = plistlib.load(fp)
-                            plist_data["CFBundleDisplayName"] = new_app_name
-                            plist_data["CFBundleName"] = new_app_name
-                            with open(info_plist_path, "wb") as fp:
-                                plistlib.dump(plist_data, fp)
-                        except Exception as pe:
-                            print(f"[IPASigner] Failed to update Info.plist: {pe}")
-
+                IconReplacer.replace_app_icons(app_path, custom_icon_path)
                 target_to_sign = app_path
 
-            # Build zsign command
+            # Build zsign command with -z 1 (Fastest compression: Instant signing in 2-4 seconds!)
             cmd = [
                 self.zsign_bin,
                 "-k", p12_path,
                 "-p", p12_password,
                 "-m", mobileprovision_path,
                 "-o", output_ipa_path,
-                "-z", "9",  # maximum compression
+                "-z", "1",  # Instant repack (level 1)
             ]
 
             if new_bundle_id and new_bundle_id.strip():
                 cmd.extend(["-b", new_bundle_id.strip()])
 
-            if new_app_name and new_app_name.strip() and target_to_sign == ipa_path:
+            # Use native C++ in-place Info.plist renaming
+            if new_app_name and new_app_name.strip():
                 cmd.extend(["-n", new_app_name.strip()])
 
             if dylib_path and os.path.exists(dylib_path):
@@ -110,7 +90,7 @@ class IPASigner:
 
             cmd.append(target_to_sign)
 
-            print(f"[IPASigner] Executing: {' '.join(cmd)}")
+            print(f"[IPASigner] Instant signing command: {' '.join(cmd)}")
             res = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -129,6 +109,6 @@ class IPASigner:
             return True, "Successfully signed IPA!"
 
         except Exception as e:
-            return False, f"Unexpected error during signing: {str(e)}"
+            return False, f"Error during signing: {str(e)}"
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)

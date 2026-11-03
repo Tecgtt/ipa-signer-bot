@@ -4,7 +4,7 @@ import inspect
 import logging
 import math
 import os
-from typing import Optional, List, AsyncGenerator, Union, Awaitable, Tuple, BinaryIO
+from typing import Optional, List, Union, Tuple, BinaryIO
 from telethon import utils, helpers, TelegramClient
 from telethon.crypto import AuthKey
 from telethon.network import MTProtoSender
@@ -29,23 +29,24 @@ TypeLocation = Union[Document, InputDocumentFileLocation, InputPeerPhotoFileLoca
 
 
 class DownloadSender:
-    def __init__(self, client: TelegramClient, sender: MTProtoSender, file: TypeLocation, offset: int, limit: int, stride: int, count: int) -> None:
+    def __init__(self, client: TelegramClient, sender: MTProtoSender, file_loc: TypeLocation, offset: int, limit: int, stride: int, count: int) -> None:
         self.sender = sender
         self.client = client
-        self.request = GetFileRequest(file, offset=offset, limit=limit)
+        self.request = GetFileRequest(file_loc, offset=offset, limit=limit)
         self.stride = stride
         self.remaining = count
 
-    async def next(self) -> Optional[bytes]:
+    async def next(self) -> Optional[Tuple[int, bytes]]:
         if not self.remaining:
             return None
+        current_offset = self.request.offset
         result = await self.client._call(self.sender, self.request)
         self.remaining -= 1
         self.request.offset += self.stride
-        return result.bytes
+        return current_offset, result.bytes
 
-    def disconnect(self) -> Awaitable[None]:
-        return self.sender.disconnect()
+    async def disconnect(self) -> None:
+        await self.sender.disconnect()
 
 
 class UploadSender:
@@ -74,7 +75,7 @@ class UploadSender:
     async def disconnect(self) -> None:
         if self.previous:
             await self.previous
-        return await self.sender.disconnect()
+        await self.sender.disconnect()
 
 
 class ParallelTransferrer:
@@ -88,7 +89,7 @@ class ParallelTransferrer:
         )
         self.senders: Optional[List[MTProtoSender]] = None
 
-    async def _init_senders(self, count: int, file: TypeLocation = None) -> None:
+    async def _init_senders(self, count: int, file_loc: TypeLocation = None) -> None:
         if self.senders:
             return
 
@@ -139,11 +140,10 @@ class ParallelTransferrer:
                 pass
 
     async def upload(self, file: BinaryIO, total_size: int, progress_callback=None) -> Tuple[TypeInputFile, int]:
-        # Always use 512KB for maximum throughput
         part_size = 512 * 1024
         big = total_size > 10 * 1024 * 1024
         part_count = math.ceil(total_size / part_size)
-        connection_count = min(max(2, math.ceil(total_size / (512 * 1024 * 8))), 8)
+        connection_count = min(max(4, math.ceil(total_size / (512 * 1024 * 4))), 10)
 
         await self._init_senders(connection_count)
         connections = len(self.senders)
@@ -160,7 +160,7 @@ class ParallelTransferrer:
         hash_md5 = hashlib.md5()
         uploaded_bytes = 0
 
-        queue = asyncio.Queue(connections * 2)
+        queue = asyncio.Queue(connections * 4)
 
         async def sender_worker(sender: UploadSender):
             while True:
@@ -201,13 +201,65 @@ class ParallelTransferrer:
         else:
             return InputFile(file_id, part_count, "upload.ipa", hash_md5.hexdigest()), total_size
 
+    async def download_to_file(self, file_loc: TypeLocation, total_size: int, dest_path: str, progress_callback=None) -> bool:
+        part_size = 512 * 1024
+        part_count = math.ceil(total_size / part_size)
+        connection_count = min(max(4, math.ceil(total_size / (512 * 1024 * 4))), 8)
+
+        await self._init_senders(connection_count, file_loc)
+        connections = len(self.senders)
+        minimum, remainder = divmod(part_count, connections)
+
+        senders = []
+        offset = 0
+        for i in range(connections):
+            count = minimum + (1 if i < remainder else 0)
+            if count == 0:
+                continue
+            senders.append(DownloadSender(
+                self.client, self.senders[i], file_loc,
+                offset=offset,
+                limit=part_size,
+                stride=part_size * connections,
+                count=count
+            ))
+            offset += part_size
+
+        # Pre-allocate output file
+        with open(dest_path, "wb") as f:
+            f.truncate(total_size)
+
+        downloaded_bytes = 0
+        lock = asyncio.Lock()
+
+        async def worker(sender: DownloadSender):
+            nonlocal downloaded_bytes
+            with open(dest_path, "r+b") as fp:
+                while True:
+                    res = await sender.next()
+                    if not res:
+                        break
+                    chunk_offset, data = res
+                    fp.seek(chunk_offset)
+                    fp.write(data)
+                    async with lock:
+                        downloaded_bytes += len(data)
+                        if progress_callback:
+                            r = progress_callback(downloaded_bytes, total_size)
+                            if inspect.isawaitable(r):
+                                await r
+
+        await asyncio.gather(*(worker(s) for s in senders))
+        await asyncio.gather(*(s.disconnect() for s in senders))
+        return os.path.exists(dest_path) and os.path.getsize(dest_path) == total_size
+
 
 async def fast_upload_file(
     client: TelegramClient,
     file_path: str,
     progress_callback=None
 ) -> TypeInputFile:
-    """Uploads file using parallel MTProto connections with fallback to standard upload."""
+    """Uploads file using parallel MTProto connections (512KB parts)."""
     file_size = os.path.getsize(file_path)
     try:
         with open(file_path, "rb") as f:
@@ -221,3 +273,42 @@ async def fast_upload_file(
             part_size_kb=512,
             progress_callback=progress_callback
         )
+
+
+async def fast_download_media(
+    client: TelegramClient,
+    message,
+    dest_path: str,
+    progress_callback=None
+) -> bool:
+    """Downloads media from message using parallel MTProto connections (512KB parts)."""
+    try:
+        doc = getattr(message, "document", None) or getattr(message, "media", None)
+        total_size = getattr(doc, "size", 0)
+        if not doc or total_size == 0:
+            return False
+
+        dc_id, location = utils.get_input_location(doc)
+        downloader = ParallelTransferrer(client, dc_id)
+        success = await downloader.download_to_file(location, total_size, dest_path, progress_callback)
+        if success:
+            return True
+    except Exception as e:
+        log.warning(f"Parallel download fallback to iter_download: {e}")
+
+    # Fallback to high-speed 512KB iter_download
+    try:
+        total_size = getattr(getattr(message, "document", None), "size", 0)
+        downloaded = 0
+        with open(dest_path, "wb") as f:
+            async for chunk in client.iter_download(message.media, request_size=512 * 1024, chunk_size=512 * 1024):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress_callback:
+                    r = progress_callback(downloaded, total_size)
+                    if inspect.isawaitable(r):
+                        await r
+        return os.path.exists(dest_path) and os.path.getsize(dest_path) > 0
+    except Exception as fallback_e:
+        log.error(f"Iter_download fallback failed: {fallback_e}")
+        return False

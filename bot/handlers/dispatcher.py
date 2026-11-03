@@ -103,15 +103,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             days_str = f"{days_left} days remaining" if days_left > 0 else "Expired"
 
             status_report = (
-                "🎉 **Certificate Configuration Complete!**\n\n"
-                "📦 **Certificate Status Report:**\n"
-                f"• **P12 File Status:** ✅ Active & Valid\n"
-                f"  - **Certificate Name:** `{info.get('common_name')}`\n"
-                f"  - **Expires On:** `{info.get('valid_to')}` ({days_str})\n"
-                f"{prov_details}\n\n"
-                "💾 **Storage:** 🟢 **Permanently Saved (हमेशा के लिए सेव है)**\n"
-                "*(जब तक आप खुद डिलीट नहीं करेंगे, यह हमेशा सेव रहेगा और आपको दोबारा अपलोड करने की ज़रूरत नहीं होगी।)*\n\n"
-                "🚀 **Status:** 100% Ready to Sign IPAs! Tap `📲 Sign IPA` below."
+                "✅ **Certificate Configured!**\n\n"
+                f"• **Name:** `{info.get('common_name')}`\n"
+                f"• **Expires:** `{info.get('valid_to')}`\n"
+                "• **Storage:** Saved Permanently ✅\n\n"
+                "👉 Tap `📲 Sign IPA` below to start signing!"
             )
 
             await update.message.reply_text(
@@ -202,21 +198,16 @@ async def document_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         has_prov = bool(user_data.get("mobileprovision_path") and os.path.exists(user_data["mobileprovision_path"]))
 
         if not has_prov:
-            # Automatically ask for mobileprovision next!
             context.user_data["waiting_for"] = "upload_prov"
             await update.message.reply_text(
-                "✅ **Step 1/3 Complete: `.p12` Certificate uploaded!**\n\n"
-                "📤 **Step 2: Now please send your `.mobileprovision` file:**",
+                "✅ **.p12 Saved!**\n\n📤 Now send your `.mobileprovision` file:",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode="Markdown"
             )
         else:
-            # Mobileprovision already exists, prompt for password
             context.user_data["waiting_for"] = "p12_password"
             await update.message.reply_text(
-                "✅ **`.p12` Certificate uploaded!** (Mobileprovision is already present)\n\n"
-                "🔑 **Step 3: Now enter the password for your `.p12` certificate:**\n"
-                "(If no password, send `none` or `blank`)",
+                "✅ **.p12 Saved!**\n\n🔑 Enter `.p12` password (send `none` if empty):",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode="Markdown"
             )
@@ -233,21 +224,16 @@ async def document_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         has_p12 = bool(user_data.get("p12_path") and os.path.exists(user_data["p12_path"]))
 
         if has_p12:
-            # Both files now uploaded! Prompt for P12 password to verify both
             context.user_data["waiting_for"] = "p12_password"
             await update.message.reply_text(
-                "✅ **Step 2/3 Complete: `.mobileprovision` file uploaded!**\n\n"
-                "🔑 **Step 3: Now enter the password for your `.p12` certificate:**\n"
-                "(If no password, send `none` or `blank`)",
+                "✅ **Profile Saved!**\n\n🔑 Enter `.p12` password (send `none` if empty):",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode="Markdown"
             )
         else:
-            # Still need P12 file
             context.user_data["waiting_for"] = "upload_p12"
             await update.message.reply_text(
-                "✅ **`.mobileprovision` Profile uploaded!**\n\n"
-                "📤 **Now please send your `.p12` certificate file:**",
+                "✅ **Profile Saved!**\n\n📤 Now send your `.p12` file:",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode="Markdown"
             )
