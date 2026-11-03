@@ -79,6 +79,54 @@ async def handle_cert_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
+    elif data == "cert_no_password":
+        from config import CERTS_DIR
+        p12_path = os.path.join(CERTS_DIR, f"{user_id}.p12")
+        if not os.path.exists(p12_path):
+            await query.message.reply_text("❌ `.p12` फ़ाइल नहीं मिली। कृपया `.p12` फ़ाइल भेजें।")
+            return
+
+        info = CertificateChecker.inspect_p12(p12_path, "")
+        if not info.get("success"):
+            context.user_data["waiting_for"] = "p12_password"
+            await query.message.reply_text(
+                "⚠️ **इस `.p12` में पासवर्ड लगा हुआ है!**\n\n"
+                "👉 कृपया चैट में अपना सही पासवर्ड टाइप करके भेजें:",
+                parse_mode="Markdown"
+            )
+            return
+
+        db.update_user_fields(
+            user_id,
+            p12_path=p12_path,
+            p12_password="",
+            cert_name=info.get("common_name", ""),
+            cert_expiry=info.get("valid_to", "")
+        )
+
+        prov_path = os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
+        if not os.path.exists(prov_path):
+            context.user_data["waiting_for"] = "upload_prov"
+            await query.message.edit_text(
+                f"✅ **.p12 (बिना पासवर्ड) सेव हो गया!**\n\n"
+                f"• **Cert:** `{info.get('common_name')}`\n\n"
+                "📤 **अब अपनी `.mobileprovision` फ़ाइल भेजें:**",
+                parse_mode="Markdown"
+            )
+        else:
+            context.user_data.pop("waiting_for", None)
+            pinfo = CertificateChecker.inspect_mobileprovision(prov_path)
+            await query.message.edit_text(
+                "🎉 **सर्टिफिकेट और प्रोफाइल सफलतापूर्वक सेव हो गया!**\n\n"
+                f"• **P12 Cert:** `{info.get('common_name')}`\n"
+                f"• **Profile:** `{pinfo.get('name') or 'Configured'}`\n"
+                "• **Storage:** हमेशा के लिए सुरक्षित सेव है ✅\n\n"
+                "👉 अब सीधे नीचे **`📲 Sign & Direct Install IPA`** बटन दबाएं!",
+                reply_markup=get_cert_menu_keyboard(has_cert=True),
+                parse_mode="Markdown"
+            )
+        return
+
     elif data == "cert_upload_p12":
         context.user_data["waiting_for"] = "upload_p12"
         await query.message.reply_text(

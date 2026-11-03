@@ -25,6 +25,10 @@ async def get_public_or_local_ip() -> str:
     if render_url:
         return render_url.rstrip("/")
 
+    render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    if render_host:
+        return f"https://{render_host.strip()}"
+
     if PUBLIC_URL:
         return PUBLIC_URL.rstrip("/")
 
@@ -71,6 +75,7 @@ async def handle_download(request: web.Request):
         return web.Response(status=404, text="File not found or expired.")
 
     response = web.FileResponse(file_path)
+    response.headers["Content-Type"] = "application/octet-stream"
     response.headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
     return response
 
@@ -114,11 +119,16 @@ async def handle_plist(request: web.Request):
     if not os.path.exists(file_path):
         return web.Response(status=404, text="IPA not found")
 
-    base_url = await get_public_or_local_ip()
-    if base_url.startswith("http://") and "127.0.0.1" not in base_url and "localhost" not in base_url:
-        https_base_url = "https://" + base_url[len("http://"):]
+    host_header = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or ""
+    if host_header and "127.0.0.1" not in host_header and "localhost" not in host_header:
+        proto = request.headers.get("X-Forwarded-Proto") or "https"
+        https_base_url = f"{proto}://{host_header}"
     else:
-        https_base_url = base_url
+        base_url = await get_public_or_local_ip()
+        if base_url.startswith("http://") and "127.0.0.1" not in base_url and "localhost" not in base_url:
+            https_base_url = "https://" + base_url[len("http://"):]
+        else:
+            https_base_url = base_url
 
     ipa_url = f"{https_base_url}/download/{ipa_filename}"
     meta = get_ipa_info(file_path)
@@ -170,11 +180,16 @@ async def handle_install_page(request: web.Request):
         base_name = safe_filename[:-4]
 
     file_path = os.path.join(SIGNED_DIR, ipa_filename)
-    base_url = await get_public_or_local_ip()
-    if base_url.startswith("http://") and "127.0.0.1" not in base_url and "localhost" not in base_url:
-        https_base_url = "https://" + base_url[len("http://"):]
+    host_header = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or ""
+    if host_header and "127.0.0.1" not in host_header and "localhost" not in host_header:
+        proto = request.headers.get("X-Forwarded-Proto") or "https"
+        https_base_url = f"{proto}://{host_header}"
     else:
-        https_base_url = base_url
+        base_url = await get_public_or_local_ip()
+        if base_url.startswith("http://") and "127.0.0.1" not in base_url and "localhost" not in base_url:
+            https_base_url = "https://" + base_url[len("http://"):]
+        else:
+            https_base_url = base_url
 
     meta = get_ipa_info(file_path) if os.path.exists(file_path) else {"app_name": "Signed App", "version": "1.0", "bundle_id": ""}
     manifest_url = f"{https_base_url}/plist/{base_name}.plist"

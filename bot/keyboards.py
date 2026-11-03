@@ -74,6 +74,16 @@ def get_cert_save_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_p12_password_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("🔓 No Password (बिना पासवर्ड के)", callback_data="cert_no_password"),
+            InlineKeyboardButton("❌ Cancel", callback_data="action_cancel"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 def get_cert_delete_confirm_keyboard():
     keyboard = [
         [

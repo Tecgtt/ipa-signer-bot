@@ -260,60 +260,20 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     install_keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📲 Direct Install on iPhone (डायरेक्ट इंस्टॉल)", url=install_url)
+            InlineKeyboardButton("📲 Direct Install on iPhone (सीधे iPhone में इंस्टॉल करें)", url=install_url)
         ],
         [
-            InlineKeyboardButton("📁 Download .IPA File", url=download_link)
+            InlineKeyboardButton("📁 Download .IPA File (फ़ाइल डाउनलोड करें)", url=download_link)
         ]
     ])
 
-    caption = (
-        f"✅ **IPA Signed!**\n\n"
-        f"📱 **File:** `{original_filename}`\n"
+    await status_msg.edit_text(
+        f"🎉 **IPA Signed Successfully!**\n\n"
+        f"📱 **App:** `{original_filename}`\n"
         f"📦 **Size:** `{size_display}`\n"
-        f"🔑 **Cert:** `{cert_info.get('cert_name') or 'Custom'}`\n\n"
-        f"👇 **iPhone में तुरंत इंस्टॉल करने के लिए नीचे बटन दबाएं:**"
-    )
-
-    uploaded_in_chat = False
-    if file_size_mb <= 2000:
-        last_edit[0] = 0.0
-        await status_msg.edit_text(f"⚡ **Uploading to Telegram...**", parse_mode="Markdown")
-        try:
-            uploaded_in_chat = await upload_direct_media(
-                chat_id=update.effective_chat.id,
-                file_path=output_ipa_path,
-                file_name=original_filename,
-                caption=caption,
-                progress_fn=update_upload_progress
-            )
-        except Exception:
-            uploaded_in_chat = False
-
-    if not uploaded_in_chat and file_size_mb <= MAX_FILE_SIZE_MB:
-        try:
-            with open(output_ipa_path, "rb") as signed_file:
-                await update.message.reply_document(
-                    document=signed_file,
-                    filename=original_filename,
-                    caption=caption,
-                    reply_markup=install_keyboard,
-                    parse_mode="Markdown"
-                )
-            uploaded_in_chat = True
-        except Exception:
-            pass
-
-    # Send 1-click install button in chat
-    await update.message.reply_text(
-        "📲 **Direct iPhone Installation Ready!**\n\n"
-        "👉 नीचे **'Direct Install on iPhone'** बटन दबाएं। Safari में 'Install' का पॉपअप आएगा और ऐप सीधे आपके iPhone पर इंस्टॉल हो जाएगी:",
+        f"🔑 **Cert:** `{cert_info.get('cert_name') or 'Saved Certificate'}`\n\n"
+        "👉 **सीधे अपने iPhone में इंस्टॉल करने के लिए नीचे 'Direct Install' बटन दबाएं:**",
         reply_markup=install_keyboard,
         parse_mode="Markdown"
     )
-
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
     return

@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import CERTS_DIR, DATA_DIR
-from bot.keyboards import get_main_keyboard, get_cancel_keyboard, get_cert_save_keyboard, get_cert_menu_keyboard
+from bot.keyboards import get_main_keyboard, get_cancel_keyboard, get_cert_save_keyboard, get_cert_menu_keyboard, get_p12_password_keyboard
 from bot.services.database import db
 from bot.services.cert_checker import CertificateChecker
 from bot.handlers.sign_ipa import sign_ipa_start, process_ipa_input
@@ -61,68 +61,60 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif waiting_for == "p12_password":
         pwd = text
-        if pwd.lower() in ["none", "blank", "empty", "no"]:
+        if pwd.lower() in ["none", "blank", "empty", "no", "skip"]:
             pwd = ""
 
         user_id = user.id
-        user_data = db.get_user(user_id) or {}
-        p12_path = user_data.get("p12_path") or os.path.join(CERTS_DIR, f"{user_id}.p12")
-        prov_path = user_data.get("mobileprovision_path") or os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
+        p12_path = os.path.join(CERTS_DIR, f"{user_id}.p12")
 
         if os.path.exists(p12_path):
             info = CertificateChecker.inspect_p12(p12_path, pwd)
             if not info.get("success"):
                 await update.message.reply_text(
-                    f"❌ **Invalid Password!**\n\n`{info.get('error')}`\n\nPlease re-enter the correct password for your `.p12` certificate:",
-                    reply_markup=get_cancel_keyboard(),
+                    f"❌ **गलत पासवर्ड! (Invalid Password)**\n\n"
+                    f"`{info.get('error')}`\n\n"
+                    "👉 कृपया अपने `.p12` का सही पासवर्ड फिर से दर्ज करें:",
+                    reply_markup=get_p12_password_keyboard(),
                     parse_mode="Markdown"
                 )
                 return
 
+            # Password is valid! Save it permanently to DB!
             db.update_user_fields(
                 user_id,
+                p12_path=p12_path,
                 p12_password=pwd,
-                cert_name=info.get("common_name", ""),
-                cert_expiry=info.get("valid_to", "")
+                cert_name=info.get("common_name", "Saved Certificate"),
+                cert_expiry=info.get("valid_to", "Active")
             )
-            context.user_data.pop("waiting_for", None)
 
-            # Check and inspect mobileprovision for complete status report
-            prov_details = "• **Mobileprovision Status:** ⚠️ Missing (Please upload `.mobileprovision`)"
-            if prov_path and os.path.exists(prov_path):
+            # Check if mobileprovision already exists
+            prov_path = os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
+            has_prov = os.path.exists(prov_path)
+
+            if not has_prov:
+                context.user_data["waiting_for"] = "upload_prov"
+                await update.message.reply_text(
+                    f"✅ **.p12 और पासवर्ड सुरक्षित सेव हो गया!**\n\n"
+                    f"• **Cert:** `{info.get('common_name')}`\n"
+                    f"• **Expires:** `{info.get('valid_to')}`\n\n"
+                    "📤 **अब अपनी `.mobileprovision` फ़ाइल भेजें:**",
+                    reply_markup=get_cancel_keyboard(),
+                    parse_mode="Markdown"
+                )
+            else:
+                context.user_data.pop("waiting_for", None)
                 pinfo = CertificateChecker.inspect_mobileprovision(prov_path)
-                if pinfo.get("success"):
-                    prov_details = (
-                        f"• **Mobileprovision Status:** ✅ Active & Valid\n"
-                        f"  - **Profile Name:** `{pinfo.get('name')}`\n"
-                        f"  - **Team Name:** `{pinfo.get('team_name')} ({pinfo.get('team_id')})`\n"
-                        f"  - **Devices Count:** `{pinfo.get('devices_count')} devices`"
-                    )
-
-            days_left = info.get("days_left", 0)
-            days_str = f"{days_left} days remaining" if days_left > 0 else "Expired"
-
-            status_report = (
-                "✅ **Certificate Configured!**\n\n"
-                f"• **Name:** `{info.get('common_name')}`\n"
-                f"• **Expires:** `{info.get('valid_to')}`\n"
-                "• **Storage:** Saved Permanently ✅\n\n"
-                "👉 Tap `📲 Sign IPA` below to start signing!"
-            )
-
-            await update.message.reply_text(
-                status_report,
-                reply_markup=main_keyboard,
-                parse_mode="Markdown"
-            )
-        else:
-            db.update_user_fields(user_id, p12_password=pwd)
-            context.user_data.pop("waiting_for", None)
-            await update.message.reply_text(
-                "🔑 **Password saved.** Now please upload your `.p12` file.",
-                reply_markup=main_keyboard,
-                parse_mode="Markdown"
-            )
+                prov_name = pinfo.get("name") or "Valid Profile"
+                await update.message.reply_text(
+                    "🎉 **सर्टिफिकेट और प्रोफाइल सफलतापूर्वक सेव हो गया!**\n\n"
+                    f"• **P12 Cert:** `{info.get('common_name')}`\n"
+                    f"• **Profile:** `{prov_name}`\n"
+                    "• **Storage:** हमेशा के लिए सुरक्षित सेव है ✅\n\n"
+                    "👉 अब सीधे नीचे **`📲 Sign & Direct Install IPA`** बटन दबाएं!",
+                    reply_markup=main_keyboard,
+                    parse_mode="Markdown"
+                )
         return
 
     elif waiting_for == "set_bundle_id":
@@ -184,22 +176,15 @@ async def document_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file_obj.download_to_drive(target)
         db.update_user_fields(user_id, p12_path=target)
 
-        cert_info = db.get_user_cert_info(user_id)
-        if not cert_info["has_prov"]:
-            context.user_data["waiting_for"] = "upload_prov"
-            await update.message.reply_text(
-                "✅ **.p12 File Received!**\n\n📤 अब अपनी `.mobileprovision` फ़ाइल भेजें:",
-                reply_markup=get_cancel_keyboard(),
-                parse_mode="Markdown"
-            )
-        else:
-            context.user_data["waiting_for"] = "p12_password"
-            await update.message.reply_text(
-                "✅ **दोनों फ़ाइलें (.p12 और Profile) मिल गईं!**\n\n"
-                "👇 नीचे **'Save Certificate'** बटन दबाकर तुरंत सुरक्षित सेव करें (या पासवर्ड डालें):",
-                reply_markup=get_cert_save_keyboard(),
-                parse_mode="Markdown"
-            )
+        # IMMEDIATELY ASK FOR P12 PASSWORD!
+        context.user_data["waiting_for"] = "p12_password"
+        await update.message.reply_text(
+            "✅ **.p12 फ़ाइल प्राप्त हुई!**\n\n"
+            "🔑 **अब अपने `.p12` सर्टिफ़िकेट का पासवर्ड दर्ज करें:**\n"
+            "(यदि कोई पासवर्ड नहीं है, तो नीचे 'No Password' दबाएं या `none` लिखें)",
+            reply_markup=get_p12_password_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     # 2. Mobileprovision Profile (.mobileprovision, .provisionprofile) - ALWAYS TOP PRIORITY
@@ -209,20 +194,38 @@ async def document_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file_obj.download_to_drive(target)
         db.update_user_fields(user_id, mobileprovision_path=target)
 
-        cert_info = db.get_user_cert_info(user_id)
-        if cert_info["has_p12"]:
+        p12_path = os.path.join(CERTS_DIR, f"{user_id}.p12")
+        user_data = db.get_user(user_id) or {}
+        has_p12 = os.path.exists(p12_path)
+        p12_pass = user_data.get("p12_password")
+
+        if not has_p12:
+            context.user_data["waiting_for"] = "upload_p12"
+            await update.message.reply_text(
+                "✅ **.mobileprovision फ़ाइल प्राप्त हुई!**\n\n"
+                "📤 **अब अपनी `.p12` सर्टिफ़िकेट फ़ाइल भेजें:**",
+                reply_markup=get_cancel_keyboard(),
+                parse_mode="Markdown"
+            )
+        elif p12_pass is None:
             context.user_data["waiting_for"] = "p12_password"
             await update.message.reply_text(
-                "✅ **दोनों फ़ाइलें (.p12 और Profile) मिल गईं!**\n\n"
-                "👇 नीचे **'Save Certificate'** बटन दबाकर तुरंत सुरक्षित सेव करें (या पासवर्ड डालें):",
-                reply_markup=get_cert_save_keyboard(),
+                "✅ **.mobileprovision प्राप्त हुई!**\n\n"
+                "🔑 **अब अपने `.p12` सर्टिफ़िकेट का पासवर्ड दर्ज करें:**\n"
+                "(यदि कोई पासवर्ड नहीं है, तो 'No Password' दबाएं या `none` लिखें)",
+                reply_markup=get_p12_password_keyboard(),
                 parse_mode="Markdown"
             )
         else:
-            context.user_data["waiting_for"] = "upload_p12"
+            context.user_data.pop("waiting_for", None)
+            pinfo = CertificateChecker.inspect_mobileprovision(target)
             await update.message.reply_text(
-                "✅ **Profile File Received!**\n\n📤 अब अपनी `.p12` सर्टिफ़िकेट फ़ाइल भेजें:",
-                reply_markup=get_cancel_keyboard(),
+                "🎉 **सर्टिफिकेट और प्रोफाइल सफलतापूर्वक सेव हो गया!**\n\n"
+                f"• **P12 Cert:** `{user_data.get('cert_name') or 'Configured'}`\n"
+                f"• **Profile:** `{pinfo.get('name') or 'Configured'}`\n"
+                "• **Storage:** हमेशा के लिए सुरक्षित सेव है ✅\n\n"
+                "👉 अब सीधे नीचे **`📲 Sign & Direct Install IPA`** बटन दबाएं!",
+                reply_markup=main_keyboard,
                 parse_mode="Markdown"
             )
         return
