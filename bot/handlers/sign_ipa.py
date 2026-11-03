@@ -254,14 +254,25 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     size_display = f"{file_size_gb:.2f} GB" if file_size_gb >= 1.0 else f"{file_size_mb:.2f} MB"
 
     base_url = await get_public_or_local_ip()
+    install_url = f"{base_url}/install/{output_filename}"
     download_link = f"{base_url}/download/{output_filename}"
+
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    install_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📲 Direct Install on iPhone (डायरेक्ट इंस्टॉल)", url=install_url)
+        ],
+        [
+            InlineKeyboardButton("📁 Download .IPA File", url=download_link)
+        ]
+    ])
 
     caption = (
         f"✅ **IPA Signed!**\n\n"
         f"📱 **File:** `{original_filename}`\n"
         f"📦 **Size:** `{size_display}`\n"
         f"🔑 **Cert:** `{cert_info.get('cert_name') or 'Custom'}`\n\n"
-        f"🔗 **Download:** [Click to Download]({download_link})"
+        f"👇 **iPhone में तुरंत इंस्टॉल करने के लिए नीचे बटन दबाएं:**"
     )
 
     uploaded_in_chat = False
@@ -286,26 +297,23 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     document=signed_file,
                     filename=original_filename,
                     caption=caption,
-                    reply_markup=main_keyboard,
+                    reply_markup=install_keyboard,
                     parse_mode="Markdown"
                 )
             uploaded_in_chat = True
         except Exception:
             pass
 
-    if uploaded_in_chat:
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        return
-
-    large_file_message = (
-        caption + "\n\n"
-        f"🚀 **Direct Link:** `{download_link}`"
-    )
-    await status_msg.edit_text(
-        large_file_message,
-        reply_markup=main_keyboard,
+    # Send 1-click install button in chat
+    await update.message.reply_text(
+        "📲 **Direct iPhone Installation Ready!**\n\n"
+        "👉 नीचे **'Direct Install on iPhone'** बटन दबाएं। Safari में 'Install' का पॉपअप आएगा और ऐप सीधे आपके iPhone पर इंस्टॉल हो जाएगी:",
+        reply_markup=install_keyboard,
         parse_mode="Markdown"
     )
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    return

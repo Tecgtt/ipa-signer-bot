@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import CERTS_DIR, DATA_DIR
-from bot.keyboards import get_main_keyboard, get_cancel_keyboard
+from bot.keyboards import get_main_keyboard, get_cancel_keyboard, get_cert_save_keyboard, get_cert_menu_keyboard
 from bot.services.database import db
 from bot.services.cert_checker import CertificateChecker
 from bot.handlers.sign_ipa import sign_ipa_start, process_ipa_input
@@ -177,66 +177,104 @@ async def document_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     main_keyboard = get_main_keyboard(is_admin=is_admin(user))
 
-    # 1. Check if user is signing an IPA
-    if waiting_for == "sign_ipa_input" or filename.endswith(".ipa"):
-        await process_ipa_input(update, context)
-        return
-
-    # 2. Check P12 inspection tool
-    elif waiting_for == "check_p12_file":
-        await process_check_p12_file(update, context)
-        return
-
-    # 3. Direct P12 Certificate upload
-    elif waiting_for == "upload_p12" or filename.endswith((".p12", ".pfx")):
+    # 1. P12 Certificate (.p12, .pfx) - ALWAYS TOP PRIORITY
+    if filename.endswith((".p12", ".pfx")) or waiting_for == "upload_p12":
         target = os.path.join(CERTS_DIR, f"{user_id}.p12")
         file_obj = await doc.get_file()
         await file_obj.download_to_drive(target)
         db.update_user_fields(user_id, p12_path=target)
 
-        user_data = db.get_user(user_id) or {}
-        has_prov = bool(user_data.get("mobileprovision_path") and os.path.exists(user_data["mobileprovision_path"]))
-
-        if not has_prov:
+        cert_info = db.get_user_cert_info(user_id)
+        if not cert_info["has_prov"]:
             context.user_data["waiting_for"] = "upload_prov"
             await update.message.reply_text(
-                "✅ **.p12 Saved!**\n\n📤 Now send your `.mobileprovision` file:",
+                "✅ **.p12 File Received!**\n\n📤 अब अपनी `.mobileprovision` फ़ाइल भेजें:",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode="Markdown"
             )
         else:
             context.user_data["waiting_for"] = "p12_password"
             await update.message.reply_text(
-                "✅ **.p12 Saved!**\n\n🔑 Enter `.p12` password (send `none` if empty):",
-                reply_markup=get_cancel_keyboard(),
+                "✅ **दोनों फ़ाइलें (.p12 और Profile) मिल गईं!**\n\n"
+                "👇 नीचे **'Save Certificate'** बटन दबाकर तुरंत सुरक्षित सेव करें (या पासवर्ड डालें):",
+                reply_markup=get_cert_save_keyboard(),
                 parse_mode="Markdown"
             )
         return
 
-    # 4. Direct Mobileprovision Profile upload
-    elif waiting_for == "upload_prov" or filename.endswith(".mobileprovision"):
+    # 2. Mobileprovision Profile (.mobileprovision, .provisionprofile) - ALWAYS TOP PRIORITY
+    elif filename.endswith((".mobileprovision", ".provisionprofile")) or waiting_for == "upload_prov":
         target = os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
         file_obj = await doc.get_file()
         await file_obj.download_to_drive(target)
         db.update_user_fields(user_id, mobileprovision_path=target)
 
-        user_data = db.get_user(user_id) or {}
-        has_p12 = bool(user_data.get("p12_path") and os.path.exists(user_data["p12_path"]))
-
-        if has_p12:
+        cert_info = db.get_user_cert_info(user_id)
+        if cert_info["has_p12"]:
             context.user_data["waiting_for"] = "p12_password"
             await update.message.reply_text(
-                "✅ **Profile Saved!**\n\n🔑 Enter `.p12` password (send `none` if empty):",
-                reply_markup=get_cancel_keyboard(),
+                "✅ **दोनों फ़ाइलें (.p12 और Profile) मिल गईं!**\n\n"
+                "👇 नीचे **'Save Certificate'** बटन दबाकर तुरंत सुरक्षित सेव करें (या पासवर्ड डालें):",
+                reply_markup=get_cert_save_keyboard(),
                 parse_mode="Markdown"
             )
         else:
             context.user_data["waiting_for"] = "upload_p12"
             await update.message.reply_text(
-                "✅ **Profile Saved!**\n\n📤 Now send your `.p12` file:",
+                "✅ **Profile File Received!**\n\n📤 अब अपनी `.p12` सर्टिफ़िकेट फ़ाइल भेजें:",
                 reply_markup=get_cancel_keyboard(),
                 parse_mode="Markdown"
             )
+        return
+
+    # 3. ZIP check: extract .p12 and .mobileprovision if user sends a zip
+    elif filename.endswith(".zip") and waiting_for != "sign_ipa_input":
+        import zipfile
+        temp_zip = os.path.join(TEMP_DIR, f"cert_{user_id}.zip")
+        file_obj = await doc.get_file()
+        await file_obj.download_to_drive(temp_zip)
+        found_p12, found_prov = False, False
+        try:
+            with zipfile.ZipFile(temp_zip, 'r') as z:
+                for zname in z.namelist():
+                    zlow = zname.lower()
+                    if zlow.endswith((".p12", ".pfx")) and not found_p12:
+                        p12_target = os.path.join(CERTS_DIR, f"{user_id}.p12")
+                        with open(p12_target, "wb") as pf:
+                            pf.write(z.read(zname))
+                        db.update_user_fields(user_id, p12_path=p12_target)
+                        found_p12 = True
+                    elif zlow.endswith((".mobileprovision", ".provisionprofile")) and not found_prov:
+                        prov_target = os.path.join(CERTS_DIR, f"{user_id}.mobileprovision")
+                        with open(prov_target, "wb") as mf:
+                            mf.write(z.read(zname))
+                        db.update_user_fields(user_id, mobileprovision_path=prov_target)
+                        found_prov = True
+            if os.path.exists(temp_zip):
+                os.remove(temp_zip)
+        except Exception:
+            pass
+
+        if found_p12 or found_prov:
+            cert_info = db.get_user_cert_info(user_id)
+            if cert_info["is_ready"]:
+                context.user_data["waiting_for"] = "p12_password"
+                await update.message.reply_text(
+                    "✅ **ZIP से सर्टिफ़िकेट और प्रोफाइल दोनों निकाल लिए गए हैं!**\n\n"
+                    "👇 नीचे **'Save Certificate'** दबाकर सुरक्षित सेव करें:",
+                    reply_markup=get_cert_save_keyboard(),
+                    parse_mode="Markdown"
+                )
+                return
+
+    # 4. Check P12 inspection tool
+    elif waiting_for == "check_p12_file":
+        await process_check_p12_file(update, context)
+        return
+
+    # 5. Check if user is signing an IPA
+    elif waiting_for == "sign_ipa_input" or filename.endswith(".ipa"):
+        await process_ipa_input(update, context)
         return
 
     elif waiting_for == "upload_thumbnail" or filename.endswith((".png", ".jpg", ".jpeg")):

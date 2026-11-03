@@ -34,7 +34,10 @@ def get_cert_menu_keyboard(has_cert: bool = False):
     keyboard = []
     if has_cert:
         keyboard.append([
-            InlineKeyboardButton("📲 Sign IPA Now", callback_data="cert_sign_now"),
+            InlineKeyboardButton("📲 Sign & Direct Install IPA", callback_data="cert_sign_now"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("💾 Certificate Saved (सुरक्षित सेव है ✅)", callback_data="cert_menu_home"),
         ])
         keyboard.append([
             InlineKeyboardButton("🔄 Replace Certificate", callback_data="cert_upload_p12"),
@@ -53,6 +56,21 @@ def get_cert_menu_keyboard(has_cert: bool = False):
     keyboard.append([
         InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_home"),
     ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_cert_save_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("💾 Save Certificate (हमेशा के लिए सेव करें)", callback_data="cert_save_direct"),
+        ],
+        [
+            InlineKeyboardButton("🔑 Enter Password (पासवर्ड डालें)", callback_data="cert_set_pass"),
+        ],
+        [
+            InlineKeyboardButton("📲 Sign & Direct Install IPA", callback_data="cert_sign_now"),
+        ]
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 

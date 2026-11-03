@@ -1,8 +1,9 @@
 import os
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.keyboards import get_cert_menu_keyboard, get_cert_delete_confirm_keyboard, get_cancel_keyboard, get_main_keyboard
+from bot.keyboards import get_cert_menu_keyboard, get_cert_delete_confirm_keyboard, get_cert_save_keyboard, get_cancel_keyboard, get_main_keyboard
 from bot.services.database import db
+from bot.services.cert_checker import CertificateChecker
 
 
 async def my_certificate_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,6 +47,36 @@ async def handle_cert_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.sign_ipa import sign_ipa_start
         context.user_data.clear()
         await sign_ipa_start(update, context)
+        return
+
+    elif data == "cert_save_direct":
+        cert_info = db.get_user_cert_info(user_id)
+        p12_path = cert_info.get("p12_path")
+        prov_path = cert_info.get("mobileprovision_path")
+        pwd = cert_info.get("p12_password", "")
+
+        info = CertificateChecker.inspect_p12(p12_path, pwd) if p12_path and os.path.exists(p12_path) else {}
+        cert_name = info.get("common_name") or "Saved Certificate"
+        cert_expiry = info.get("valid_to") or "Active"
+
+        db.update_user_fields(
+            user_id,
+            p12_path=p12_path,
+            mobileprovision_path=prov_path,
+            cert_name=cert_name,
+            cert_expiry=cert_expiry
+        )
+        context.user_data.clear()
+
+        await query.message.edit_text(
+            f"💾 **Certificate Saved Permanently!**\n\n"
+            f"• **Name:** `{cert_name}`\n"
+            f"• **Expires:** `{cert_expiry}`\n"
+            "• **Status:** हमेशा के लिए सुरक्षित सेव हो चुका है ✅\n\n"
+            "👉 अब सीधे नीचे `📲 Sign & Direct Install IPA` दबाएं!",
+            reply_markup=get_cert_menu_keyboard(has_cert=True),
+            parse_mode="Markdown"
+        )
         return
 
     elif data == "cert_upload_p12":

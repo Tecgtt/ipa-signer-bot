@@ -2,6 +2,8 @@ import os
 import asyncio
 import socket
 import aiohttp
+import zipfile
+import plistlib
 from aiohttp import web
 from config import SIGNED_DIR, TEMP_DIR, SERVER_HOST, SERVER_PORT, PUBLIC_URL, ZSIGN_PATH
 from bot.services.database import db
@@ -71,6 +73,155 @@ async def handle_download(request: web.Request):
     response = web.FileResponse(file_path)
     response.headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
     return response
+
+
+def get_ipa_info(ipa_path: str) -> dict:
+    info = {"bundle_id": "com.app.signed", "app_name": "SignedApp", "version": "1.0"}
+    try:
+        with zipfile.ZipFile(ipa_path, 'r') as zf:
+            for name in zf.namelist():
+                if name.startswith("Payload/") and name.endswith(".app/Info.plist"):
+                    with zf.open(name) as fp:
+                        plist_data = plistlib.load(fp)
+                        info["bundle_id"] = plist_data.get("CFBundleIdentifier", info["bundle_id"])
+                        info["app_name"] = (
+                            plist_data.get("CFBundleDisplayName")
+                            or plist_data.get("CFBundleName")
+                            or info["app_name"]
+                        )
+                        info["version"] = str(
+                            plist_data.get("CFBundleShortVersionString")
+                            or plist_data.get("CFBundleVersion")
+                            or "1.0"
+                        )
+                        break
+    except Exception as e:
+        print(f"[get_ipa_info] Info.plist read: {e}")
+    return info
+
+
+async def handle_plist(request: web.Request):
+    filename = request.match_info.get("filename", "")
+    safe_filename = os.path.basename(filename)
+    if safe_filename.endswith(".plist"):
+        safe_filename = safe_filename[:-6]
+    if not safe_filename.endswith(".ipa"):
+        ipa_filename = f"{safe_filename}.ipa"
+    else:
+        ipa_filename = safe_filename
+
+    file_path = os.path.join(SIGNED_DIR, ipa_filename)
+    if not os.path.exists(file_path):
+        return web.Response(status=404, text="IPA not found")
+
+    base_url = await get_public_or_local_ip()
+    if base_url.startswith("http://") and "127.0.0.1" not in base_url and "localhost" not in base_url:
+        https_base_url = "https://" + base_url[len("http://"):]
+    else:
+        https_base_url = base_url
+
+    ipa_url = f"{https_base_url}/download/{ipa_filename}"
+    meta = get_ipa_info(file_path)
+
+    plist_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>assets</key>
+            <array>
+                <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>{ipa_url}</string>
+                </dict>
+            </array>
+            <key>metadata</key>
+            <dict>
+                <key>bundle-identifier</key>
+                <string>{meta['bundle_id']}</string>
+                <key>bundle-version</key>
+                <string>{meta['version']}</string>
+                <key>kind</key>
+                <string>software</string>
+                <key>title</key>
+                <string>{meta['app_name']}</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>"""
+    return web.Response(text=plist_xml, content_type="text/xml")
+
+
+async def handle_install_page(request: web.Request):
+    filename = request.match_info.get("filename", "")
+    safe_filename = os.path.basename(filename)
+    if safe_filename.endswith(".plist"):
+        safe_filename = safe_filename[:-6]
+    if not safe_filename.endswith(".ipa"):
+        ipa_filename = f"{safe_filename}.ipa"
+        base_name = safe_filename
+    else:
+        ipa_filename = safe_filename
+        base_name = safe_filename[:-4]
+
+    file_path = os.path.join(SIGNED_DIR, ipa_filename)
+    base_url = await get_public_or_local_ip()
+    if base_url.startswith("http://") and "127.0.0.1" not in base_url and "localhost" not in base_url:
+        https_base_url = "https://" + base_url[len("http://"):]
+    else:
+        https_base_url = base_url
+
+    meta = get_ipa_info(file_path) if os.path.exists(file_path) else {"app_name": "Signed App", "version": "1.0", "bundle_id": ""}
+    manifest_url = f"{https_base_url}/plist/{base_name}.plist"
+    itms_url = f"itms-services://?action=download-manifest&url={manifest_url}"
+    download_url = f"{base_url}/download/{ipa_filename}"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Install {meta['app_name']}</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }}
+    .container {{ background: #161f30; border-radius: 24px; padding: 36px 24px; max-width: 400px; width: 100%; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.6); border: 1px solid #1e293b; }}
+    .icon {{ width: 88px; height: 88px; border-radius: 20px; background: linear-gradient(135deg, #0284c7, #6366f1); margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; font-size: 40px; box-shadow: 0 8px 24px rgba(2,132,199,0.4); }}
+    h1 {{ margin: 0 0 6px 0; font-size: 22px; font-weight: 700; color: #f8fafc; }}
+    p.meta {{ color: #94a3b8; font-size: 13px; margin: 0 0 28px 0; }}
+    .btn {{ display: block; width: 100%; padding: 16px; border-radius: 14px; font-size: 17px; font-weight: 600; text-decoration: none; margin-bottom: 12px; transition: 0.2s; }}
+    .btn-install {{ background: #0284c7; color: #fff; box-shadow: 0 4px 14px rgba(2,132,199,0.4); }}
+    .btn-install:active {{ background: #0369a1; transform: scale(0.98); }}
+    .btn-download {{ background: #1e293b; color: #38bdf8; }}
+    .note {{ color: #64748b; font-size: 13px; margin-top: 20px; line-height: 1.5; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">📱</div>
+    <h1>{meta['app_name']}</h1>
+    <p class="meta">v{meta['version']} • Direct iOS Wireless Install</p>
+    
+    <a href="{itms_url}" class="btn btn-install" id="installBtn">📲 Tap to Install (डायरेक्ट इंस्टॉल)</a>
+    <a href="{download_url}" class="btn btn-download">📁 Download .IPA File</a>
+
+    <p class="note">👉 जब <b>"Install"</b> का पॉपअप आए, तो <b>Install</b> पर टैप करें। ऐप आपके iPhone होम स्क्रीन पर इंस्टॉल हो जाएगी।</p>
+  </div>
+  <script>
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {{
+      setTimeout(function() {{
+        window.location.href = "{itms_url}";
+      }}, 500);
+    }}
+  </script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
 
 
 # Modern Web Upload Portal for >2GB IPAs
@@ -287,21 +438,25 @@ async def run_background_signing(user_id: int, input_ipa_path: str, original_fil
     size_display = f"{file_size_gb:.2f} GB" if file_size_gb >= 1.0 else f"{file_size_mb:.2f} MB"
 
     base_url = await get_public_or_local_ip()
+    install_url = f"{base_url}/install/{output_filename}"
     download_link = f"{base_url}/download/{output_filename}"
 
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    install_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📲 Direct Install on iPhone (डायरेक्ट इंस्टॉल)", url=install_url)
+        ],
+        [
+            InlineKeyboardButton("📁 Download .IPA File", url=download_link)
+        ]
+    ])
+
     msg = (
-        f"✅ **IPA Signed Successfully!**\n\n"
+        f"✅ **IPA Signed!**\n\n"
         f"📱 **File:** `{original_filename}`\n"
         f"📦 **Size:** `{size_display}`\n"
-        f"🆔 **Bundle ID:** `{bundle_id or 'Original'}`\n"
-        f"🏷️ **App Name:** `{app_name or 'Original'}`\n"
-        f"🔑 **Certificate:** `{cert_info.get('cert_name') or 'Custom Saved'}` (Permanently Saved ✅)\n\n"
-        f"🚀 **Direct High-Speed Download Link:**\n"
-        f"🔗 [Click Here to Download Signed IPA]({download_link})\n\n"
-        f"`{download_link}`\n\n"
-        "📲 **How to Install:**\n"
-        "• Download & open in **TrollStore** / **Scarlet** / **Esign**\n"
-        "• Or sideload with **AltStore** / **Sideloadly**"
+        f"🔑 **Cert:** `{cert_info.get('cert_name') or 'Custom Saved'}` (Saved ✅)\n\n"
+        f"👇 **iPhone में तुरंत इंस्टॉल करने के लिए नीचे बटन दबाएं:**"
     )
 
     try:
@@ -313,19 +468,19 @@ async def run_background_signing(user_id: int, input_ipa_path: str, original_fil
                 file_name=original_filename,
                 caption=msg
             )
-        else:
-            await _bot_instance.send_message(
-                chat_id=user_id,
-                text=msg,
-                parse_mode="Markdown",
-                disable_web_page_preview=True
-            )
+        await _bot_instance.send_message(
+            chat_id=user_id,
+            text="📲 **Direct iPhone Installation Ready!**\n\n👉 नीचे 'Direct Install' दबाएं:",
+            reply_markup=install_keyboard,
+            parse_mode="Markdown"
+        )
     except Exception as e:
         print(f"[run_background_signing] Notification error: {e}")
         try:
             await _bot_instance.send_message(
                 chat_id=user_id,
                 text=msg,
+                reply_markup=install_keyboard,
                 parse_mode="Markdown",
                 disable_web_page_preview=True
             )
@@ -341,6 +496,8 @@ def create_web_app() -> web.Application:
     app.router.add_get("/upload", handle_upload_page)
     app.router.add_post("/api/upload_ipa", handle_api_upload_ipa)
     app.router.add_get("/download/{filename}", handle_download)
+    app.router.add_get("/plist/{filename}", handle_plist)
+    app.router.add_get("/install/{filename}", handle_install_page)
     return app
 
 
