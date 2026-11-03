@@ -11,6 +11,9 @@ from config import BOT_TOKEN
 from bot.handlers.start import start_handler
 from bot.handlers.dispatcher import text_router, document_router, photo_router, callback_router
 from bot.handlers.admin import admin_dashboard_handler
+import os
+import asyncio
+import aiohttp
 from bot.services.web_server import start_web_server
 
 # Configure logging
@@ -25,9 +28,29 @@ async def error_handler(update, context):
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
 
+async def render_keep_alive():
+    """Pings Render external URL every 10 minutes to prevent free tier spin-down/sleep."""
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if not url:
+        return
+    target = url.rstrip("/") + "/healthz"
+    logger.info(f"🔄 Render Keep-Alive active: {target}")
+    while True:
+        await asyncio.sleep(600)  # 10 minutes
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(target) as resp:
+                    logger.info(f"⏰ Render Keep-Alive ping: {resp.status}")
+        except Exception as e:
+            logger.warning(f"Render keep-alive ping error: {e}")
+
+
 async def post_init(application):
     # Launch built-in web server for large file (>2GB) downloads
     await start_web_server()
+    # Start keep-alive loop to prevent Render sleep
+    asyncio.create_task(render_keep_alive())
 
 
 def main():
