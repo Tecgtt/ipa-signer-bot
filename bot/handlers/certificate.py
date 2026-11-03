@@ -72,7 +72,17 @@ async def handle_cert_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     user_id = user.id
 
-    if data == "cert_upload_p12":
+    if data == "cert_upload_zip":
+        context.user_data["waiting_for"] = "upload_cert_zip"
+        await query.message.reply_text(
+            "📦 **Send your Certificate ZIP file now.**\n\n"
+            "The ZIP file should contain your `.p12` certificate and `.mobileprovision` file (and optionally a `password.txt`).\n\n"
+            "I will automatically extract and configure both files!",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "cert_upload_p12":
         context.user_data["waiting_for"] = "upload_p12"
         await query.message.reply_text(
             "📤 **Send your `.p12` certificate file now.**\n\n"

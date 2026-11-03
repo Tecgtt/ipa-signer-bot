@@ -33,6 +33,9 @@ def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 def get_cert_menu_keyboard(has_cert: bool = False):
     keyboard = [
         [
+            InlineKeyboardButton("📦 Upload ZIP (P12 + Prov together)", callback_data="cert_upload_zip"),
+        ],
+        [
             InlineKeyboardButton("📤 Upload P12", callback_data="cert_upload_p12"),
             InlineKeyboardButton("📤 Upload Mobileprovision", callback_data="cert_upload_prov"),
         ],

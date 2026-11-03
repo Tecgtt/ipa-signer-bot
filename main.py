@@ -47,8 +47,8 @@ async def render_keep_alive():
 
 
 async def post_init(application):
-    # Launch built-in web server for large file (>2GB) downloads
-    await start_web_server()
+    # Launch built-in web server for large file (>2GB) downloads and uploads
+    await start_web_server(application.bot)
     # Start keep-alive loop to prevent Render sleep
     asyncio.create_task(render_keep_alive())
 

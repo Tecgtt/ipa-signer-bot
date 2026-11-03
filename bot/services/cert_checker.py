@@ -198,3 +198,73 @@ class CertificateChecker:
             }
         except Exception as e:
             return {"success": False, "error": f"Failed to parse mobileprovision: {str(e)}"}
+
+    @staticmethod
+    def extract_zip_certificates(zip_path: str, extract_to_dir: str, user_id: int) -> Dict[str, Any]:
+        """
+        Inspects a zip file and extracts any .p12, .mobileprovision, and password text.
+        """
+        import zipfile
+        import shutil
+
+        res = {
+            "is_cert_bundle": False,
+            "has_p12": False,
+            "has_prov": False,
+            "p12_path": None,
+            "prov_path": None,
+            "password": None,
+        }
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                p12_item = None
+                prov_item = None
+                pass_item = None
+
+                for name in zf.namelist():
+                    lower = name.lower()
+                    if lower.startswith("__macosx") or lower.endswith("/"):
+                        continue
+                    if lower.endswith((".p12", ".pfx")):
+                        p12_item = name
+                    elif lower.endswith(".mobileprovision"):
+                        prov_item = name
+                    elif any(k in lower for k in ["pass.txt", "password.txt", "pwd.txt", "code.txt"]):
+                        pass_item = name
+
+                if p12_item or prov_item:
+                    res["is_cert_bundle"] = True
+
+                    if p12_item:
+                        dst_p12 = os.path.join(extract_to_dir, f"{user_id}.p12")
+                        with zf.open(p12_item) as src, open(dst_p12, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                        res["has_p12"] = True
+                        res["p12_path"] = dst_p12
+
+                    if prov_item:
+                        dst_prov = os.path.join(extract_to_dir, f"{user_id}.mobileprovision")
+                        with zf.open(prov_item) as src, open(dst_prov, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                        res["has_prov"] = True
+                        res["prov_path"] = dst_prov
+
+                    if pass_item:
+                        try:
+                            with zf.open(pass_item) as src:
+                                raw_pwd = src.read().decode("utf-8", errors="ignore").strip()
+                                for line in raw_pwd.splitlines():
+                                    line = line.strip()
+                                    if line:
+                                        if ":" in line:
+                                            res["password"] = line.split(":", 1)[1].strip()
+                                        else:
+                                            res["password"] = line
+                                        break
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[extract_zip_certificates] Error: {e}")
+
+        return res

@@ -45,11 +45,18 @@ async def sign_ipa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["waiting_for"] = "sign_ipa_input"
 
+    base_url = await get_public_or_local_ip()
+    upload_portal_url = f"{base_url}/upload?user_id={user_id}"
+
     msg = (
         "📲 **Ready to Sign IPA!**\n\n"
-        "Send the IPA file you wish to sign:\n"
-        "1. 📎 **Upload IPA file directly** (under 50MB via Telegram)\n"
-        "2. 🔗 **Or send a direct download link** (for files up to & over 2GB, e.g. `https://.../app.ipa`)\n\n"
+        "Choose how you want to provide your IPA file:\n\n"
+        "1. 🌐 **Web Upload Portal (Recommended for &gt;200MB, 2GB, 3GB+ files):**\n"
+        f"   👉 [Click Here to Upload Large IPA]({upload_portal_url})\n\n"
+        "2. 🔗 **Or Send a Direct Download Link:**\n"
+        "   Send any direct link, Google Drive link, or MediaFire link here in chat.\n\n"
+        "3. 📎 **Or Send Document directly:**\n"
+        "   *(Note: Telegram Bot API limits direct chat uploads to 20MB)*\n\n"
         "⚙️ *Current active settings:*\n"
         f"• **Bundle ID:** `{user_data.get('custom_bundle_id') or 'Default'}`\n"
         f"• **App Name:** `{user_data.get('custom_app_name') or 'Default'}`\n"
@@ -60,16 +67,34 @@ async def sign_ipa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         msg,
         reply_markup=get_cancel_keyboard(),
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        disable_web_page_preview=True
     )
+
+
+def convert_to_direct_url(url: str) -> str:
+    import re
+    # Google Drive conversion
+    if "drive.google.com" in url:
+        m = re.search(r'(?:file/d/|id=)([a-zA-Z0-9_-]+)', url)
+        if m:
+            return f"https://drive.google.com/uc?export=download&id={m.group(1)}&confirm=t"
+    # Dropbox conversion
+    if "dropbox.com" in url:
+        if "dl=0" in url:
+            return url.replace("dl=0", "dl=1")
+        elif not url.endswith("dl=1"):
+            return url + ("&dl=1" if "?" in url else "?dl=1")
+    return url
 
 
 async def download_file_from_url(url: str, dest_path: str, status_msg=None) -> bool:
     try:
-        # 1-hour timeout for massive files (>2GB)
-        timeout = aiohttp.ClientTimeout(total=3600)
+        url = convert_to_direct_url(url)
+        # 2-hour timeout for massive files (>2GB)
+        timeout = aiohttp.ClientTimeout(total=7200)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
+            async with session.get(url, allow_redirects=True) as response:
                 if response.status != 200:
                     return False
                 
@@ -148,9 +173,16 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_obj = await doc.get_file()
             await file_obj.download_to_drive(input_ipa_path)
         except Exception as e:
+            base_url = await get_public_or_local_ip()
+            upload_portal_url = f"{base_url}/upload?user_id={user_id}"
             await status_msg.edit_text(
-                f"❌ Telegram download error: {e}\n\n"
-                "💡 *Note:* Telegram restricts direct bot uploads to 20MB. For larger files (up to & over 2GB), please upload the IPA to Google Drive, Dropbox, or any direct file host and send the link here!"
+                "⚠️ **File exceeds Telegram Bot Chat limit (20MB)!**\n\n"
+                "Telegram's cloud servers do not allow bots to download files larger than 20MB directly inside the chat window.\n\n"
+                "🚀 **Use our Web Upload Portal to upload this file (supports up to 5GB+ with 0 limits):**\n"
+                f"👉 [Click Here to Upload Large IPA]({upload_portal_url})\n\n"
+                "*(Or upload your file to Google Drive / MediaFire and send the direct link here)*",
+                parse_mode="Markdown",
+                disable_web_page_preview=True
             )
             return
     else:
