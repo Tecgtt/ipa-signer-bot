@@ -15,6 +15,7 @@ import os
 import asyncio
 import aiohttp
 from bot.services.web_server import start_web_server
+from bot.services.telegram_mtproto import get_mtproto_client, stop_mtproto_client
 
 # Configure logging
 logging.basicConfig(
@@ -47,10 +48,16 @@ async def render_keep_alive():
 
 
 async def post_init(application):
-    # Launch built-in web server for large file (>2GB) downloads and uploads
+    # Launch built-in web server for large file downloads and uploads
     await start_web_server(application.bot)
+    # Start MTProto client for up to 2GB in-chat transfers
+    asyncio.create_task(get_mtproto_client())
     # Start keep-alive loop to prevent Render sleep
     asyncio.create_task(render_keep_alive())
+
+
+async def post_shutdown(application):
+    await stop_mtproto_client()
 
 
 def main():
@@ -65,6 +72,7 @@ def main():
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
 

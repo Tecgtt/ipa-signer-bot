@@ -1,4 +1,5 @@
 import os
+import time
 import aiohttp
 import asyncio
 from telegram import Update
@@ -9,6 +10,7 @@ from bot.keyboards import get_cancel_keyboard, get_main_keyboard, get_cert_menu_
 from bot.services.database import db
 from bot.services.signer import IPASigner
 from bot.services.web_server import get_public_or_local_ip
+from bot.services.telegram_mtproto import download_direct_media, upload_direct_media
 from bot.handlers.admin import is_admin
 
 signer = IPASigner(zsign_bin=ZSIGN_PATH)
@@ -50,13 +52,13 @@ async def sign_ipa_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         "📲 **Ready to Sign IPA!**\n\n"
-        "Choose how you want to provide your IPA file:\n\n"
-        "1. 🌐 **Web Upload Portal (Recommended for &gt;200MB, 2GB, 3GB+ files):**\n"
-        f"   👉 [Click Here to Upload Large IPA]({upload_portal_url})\n\n"
-        "2. 🔗 **Or Send a Direct Download Link:**\n"
-        "   Send any direct link, Google Drive link, or MediaFire link here in chat.\n\n"
-        "3. 📎 **Or Send Document directly:**\n"
-        "   *(Note: Telegram Bot API limits direct chat uploads to 20MB)*\n\n"
+        "You can send your IPA in any of the following ways:\n\n"
+        "1. 📎 **Direct in Chat (Up to 2 GB):**\n"
+        "   Simply send the `.ipa` file directly here in Telegram chat.\n\n"
+        "2. 🔗 **Direct Download Link:**\n"
+        "   Send any direct link, Google Drive, Dropbox, or MediaFire link.\n\n"
+        "3. 🌐 **Web Upload Portal (For massive files up to 10 GB):**\n"
+        f"   👉 [Click Here to Open Web Upload Portal]({upload_portal_url})\n\n"
         "⚙️ *Current active settings:*\n"
         f"• **Bundle ID:** `{user_data.get('custom_bundle_id') or 'Default'}`\n"
         f"• **App Name:** `{user_data.get('custom_app_name') or 'Default'}`\n"
@@ -117,7 +119,7 @@ async def download_file_from_url(url: str, dest_path: str, status_msg=None) -> b
                             mb_total = total_size / (1024 * 1024)
                             try:
                                 await status_msg.edit_text(
-                                    f"⏳ **Downloading IPA...**\n`{mb_done:.1f} MB / {mb_total:.1f} MB ({int(mb_done/mb_total*100)}%)`",
+                                    f"⏳ **Downloading IPA from Link...**\n`{mb_done:.1f} MB / {mb_total:.1f} MB ({int(mb_done/mb_total*100)}%)`",
                                     parse_mode="Markdown"
                                 )
                             except Exception:
@@ -140,7 +142,46 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     main_keyboard = get_main_keyboard(is_admin=is_admin(user))
 
-    # Check if user sent a URL or a Telegram document
+    # Helper for throttled progress bar updates
+    last_edit = [0.0]
+
+    async def update_download_progress(current: int, total: int):
+        now = time.time()
+        if total > 0 and (now - last_edit[0] >= 3.0 or current == total):
+            last_edit[0] = now
+            pct = int((current / total) * 100)
+            mb_cur = current / (1024 * 1024)
+            mb_tot = total / (1024 * 1024)
+            filled = min(10, max(0, pct // 10))
+            bar = "█" * filled + "░" * (10 - filled)
+            try:
+                await status_msg.edit_text(
+                    f"⏳ **Downloading IPA from Telegram ({pct}%)...**\n"
+                    f"`[{bar}]` {mb_cur:.1f} MB / {mb_tot:.1f} MB",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+    async def update_upload_progress(current: int, total: int):
+        now = time.time()
+        if total > 0 and (now - last_edit[0] >= 3.0 or current == total):
+            last_edit[0] = now
+            pct = int((current / total) * 100)
+            mb_cur = current / (1024 * 1024)
+            mb_tot = total / (1024 * 1024)
+            filled = min(10, max(0, pct // 10))
+            bar = "█" * filled + "░" * (10 - filled)
+            try:
+                await status_msg.edit_text(
+                    f"📤 **Uploading Signed IPA to Telegram ({pct}%)...**\n"
+                    f"`[{bar}]` {mb_cur:.1f} MB / {mb_tot:.1f} MB",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+    # 1. User sent a URL link
     if update.message.text:
         text = update.message.text.strip()
         if text.startswith("http://") or text.startswith("https://"):
@@ -158,6 +199,8 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_keyboard
             )
             return
+
+    # 2. User sent an IPA file directly in chat
     elif update.message.document:
         doc = update.message.document
         original_filename = doc.file_name or "app.ipa"
@@ -168,19 +211,46 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        status_msg = await update.message.reply_text("⏳ **Downloading IPA from Telegram...**", parse_mode="Markdown")
+        file_size_bytes = doc.file_size or 0
+        file_size_mb = file_size_bytes / (1024 * 1024)
+
+        status_msg = await update.message.reply_text(
+            f"⏳ **Downloading `{original_filename}` ({file_size_mb:.1f} MB)...**\n`Initializing high-speed transfer...`",
+            parse_mode="Markdown"
+        )
+
+        download_success = False
+
+        # Attempt 1: Telethon MTProto (supports up to 2000 MB / 2 GB direct in chat)
         try:
-            file_obj = await doc.get_file()
-            await file_obj.download_to_drive(input_ipa_path)
+            download_success = await download_direct_media(
+                chat_id=update.effective_chat.id,
+                message_id=update.message.message_id,
+                dest_path=input_ipa_path,
+                progress_fn=update_download_progress
+            )
         except Exception as e:
+            print(f"[Telethon MTProto download exception]: {e}")
+            download_success = False
+
+        # Attempt 2: Standard Bot API get_file fallback
+        if not download_success:
+            try:
+                file_obj = await doc.get_file()
+                await file_obj.download_to_drive(input_ipa_path)
+                download_success = True
+            except Exception:
+                download_success = False
+
+        if not download_success or not os.path.exists(input_ipa_path) or os.path.getsize(input_ipa_path) == 0:
             base_url = await get_public_or_local_ip()
             upload_portal_url = f"{base_url}/upload?user_id={user_id}"
             await status_msg.edit_text(
-                "⚠️ **File exceeds Telegram Bot Chat limit (20MB)!**\n\n"
-                "Telegram's cloud servers do not allow bots to download files larger than 20MB directly inside the chat window.\n\n"
-                "🚀 **Use our Web Upload Portal to upload this file (supports up to 5GB+ with 0 limits):**\n"
+                "⚠️ **Could not download file directly from Telegram!**\n\n"
+                "Telegram sets an in-chat cap of 2 GB.\n\n"
+                "🚀 **Use our Web Upload Portal for unlimited file sizes (up to 10 GB):**\n"
                 f"👉 [Click Here to Upload Large IPA]({upload_portal_url})\n\n"
-                "*(Or upload your file to Google Drive / MediaFire and send the direct link here)*",
+                "*(Or upload your IPA to Google Drive / MediaFire and send the link here)*",
                 parse_mode="Markdown",
                 disable_web_page_preview=True
             )
@@ -247,6 +317,9 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     size_display = f"{file_size_gb:.2f} GB" if file_size_gb >= 1.0 else f"{file_size_mb:.2f} MB"
 
+    base_url = await get_public_or_local_ip()
+    download_link = f"{base_url}/download/{output_filename}"
+
     caption = (
         f"✅ **IPA Signed Successfully!**\n\n"
         f"📱 **File:** `{original_filename}`\n"
@@ -254,13 +327,32 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 **Bundle ID:** `{bundle_id or 'Original'}`\n"
         f"🏷️ **App Name:** `{app_name or 'Original'}`\n"
         f"🔑 **Certificate:** `{user_data.get('cert_name') or 'Custom'}`\n\n"
+        f"🚀 **Direct Download Link:** [Click to Download]({download_link})\n\n"
         "📲 **How to Install:**\n"
         "• Send to **TrollStore** / **Scarlet** / **Esign**\n"
         "• Or sideload with **AltStore** / **Sideloadly**"
     )
 
-    # If file size <= 50MB (standard Telegram bot direct upload)
-    if file_size_mb <= MAX_FILE_SIZE_MB:
+    # User requested: Both IPA direct in chat AND Link should be available!
+    # If file <= 2000 MB: try direct Telegram in-chat upload via MTProto
+    uploaded_in_chat = False
+    if file_size_mb <= 2000:
+        last_edit[0] = 0.0
+        await status_msg.edit_text(f"📤 **Uploading signed `{original_filename}` to Telegram chat...**", parse_mode="Markdown")
+        try:
+            uploaded_in_chat = await upload_direct_media(
+                chat_id=update.effective_chat.id,
+                file_path=output_ipa_path,
+                file_name=original_filename,
+                caption=caption,
+                progress_fn=update_upload_progress
+            )
+        except Exception as e:
+            print(f"[Direct MTProto upload error]: {e}")
+            uploaded_in_chat = False
+
+    # Fallback to standard Bot API if <= 50MB and MTProto didn't send
+    if not uploaded_in_chat and file_size_mb <= MAX_FILE_SIZE_MB:
         try:
             with open(output_ipa_path, "rb") as signed_file:
                 await update.message.reply_document(
@@ -270,23 +362,25 @@ async def process_ipa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=main_keyboard,
                     parse_mode="Markdown"
                 )
-            await status_msg.delete()
-            return
+            uploaded_in_chat = True
         except Exception:
             pass
 
-    # For files > 50MB and especially > 2GB: Provide direct high-speed HTTP download link!
-    base_url = await get_public_or_local_ip()
-    download_link = f"{base_url}/download/{output_filename}"
+    if uploaded_in_chat:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        return
 
+    # If file was > 2GB or direct in-chat upload was bypassed: deliver high-speed download link
     large_file_message = (
         caption + "\n\n"
-        f"🚀 **Direct Download Link (Unlimited Size / >2GB):**\n"
+        f"🚀 **Direct High-Speed Download Link:**\n"
         f"🔗 [Click Here to Download Signed IPA]({download_link})\n\n"
         f"`{download_link}`\n\n"
-        "*(Link is valid and supports high-speed download directly into Safari / TrollStore)*"
+        "*(Link is active and supports direct download into Safari / TrollStore / Esign)*"
     )
-
     await status_msg.edit_text(
         large_file_message,
         reply_markup=main_keyboard,
